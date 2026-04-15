@@ -1,1 +1,2 @@
 # pt_DataVisualize
+pt_DataVisualizeは、テキストデータを可視化方法まとめたプロジェクトです。
