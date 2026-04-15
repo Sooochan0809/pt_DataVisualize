@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>karakasa</title>
+
+    <style>
+        html,
+        body {
+            overflow: hidden;
+        }
+
+        body {
+            font-family: "Yu Gothic Medium", "Yu Gothic", sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+        }
+
+
+        .container {
+            width: 100dvw;
+            height: 100dvh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .center {
+            width: 12vw;
+            height: 12vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 50%;
+            overflow: hidden;
+        }
+
+        .center img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .ring {
+            position: absolute;
+            inset: 0;
+            transform-origin: 50% 50%;
+            pointer-events: none;
+        }
+
+        .label {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform-origin: 0 0;
+            white-space: nowrap;
+            font-size: 11px;
+            color: #222;
+            padding: 0 0.2em;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" id="container">
+        <div class="center">
+            <img src="/sample.png" alt="表情素材">
+        </div>
+    </div>
+</body>
+
+<script>
+    const container = document.getElementById("container");
+    const center = container.querySelector(".center");
+
+    const labelGapPx = 20;
+    const ringPaddingPx = 4;
+    const rotationSpeedDegPerSecond = 0.5;
+    const rings = [];
+    let animationFrameId = null;
+    let previousTimestamp = null;
+
+    function measureLabelWidth(text) {
+        const probe = document.createElement("div");
+        probe.className = "label";
+        probe.textContent = text;
+        probe.style.visibility = "hidden";
+        probe.style.transform = "none";
+
+        container.appendChild(probe);
+        const width = probe.getBoundingClientRect().width;
+        probe.remove();
+
+        return width;
+    }
+
+    function updateRingTransforms() {
+        rings.forEach((ring) => {
+            ring.element.style.transform = `rotate(${ring.rotation}deg)`;
+        });
+    }
+
+    function animateRings(timestamp) {
+        if (previousTimestamp === null) {
+            previousTimestamp = timestamp;
+        }
+
+        const deltaSeconds = (timestamp - previousTimestamp) / 1000;
+        previousTimestamp = timestamp;
+
+        rings.forEach((ring) => {
+            ring.rotation += ring.direction * rotationSpeedDegPerSecond * deltaSeconds;
+        });
+
+        updateRingTransforms();
+        animationFrameId = window.requestAnimationFrame(animateRings);
+    }
+
+    function ensureAnimation() {
+        if (animationFrameId !== null) {
+            return;
+        }
+
+        previousTimestamp = null;
+        animationFrameId = window.requestAnimationFrame(animateRings);
+    }
+
+    function renderLabels(names) {
+        let radius = center.offsetWidth / 2;
+        let remainingNames = [...names];
+
+        rings.length = 0;
+        container.querySelectorAll(".ring").forEach((ring) => ring.remove());
+
+        while (remainingNames.length > 0) {
+            const circumference = 2 * Math.PI * radius;
+            const maxLabelsInRing = Math.max(1, Math.floor(circumference / labelGapPx));
+            const ringNames = remainingNames.slice(0, maxLabelsInRing);
+            const angleStep = 360 / ringNames.length;
+            let maxLabelWidth = 0;
+            const ringIndex = rings.length;
+            const ringElement = document.createElement("div");
+            const direction = ringIndex % 2 === 0 ? 1 : -1;
+
+            ringElement.className = "ring";
+            container.appendChild(ringElement);
+
+            ringNames.forEach((name, i) => {
+                const angle = angleStep * i;
+                maxLabelWidth = Math.max(maxLabelWidth, measureLabelWidth(name));
+
+                const el = document.createElement("div");
+                el.className = "label";
+                el.textContent = name;
+
+                el.style.transform = `
+                rotate(${angle}deg)
+                translate(${radius}px, 0)
+              `;
+
+                ringElement.appendChild(el);
+            });
+
+            rings.push({
+                element: ringElement,
+                rotation: 0,
+                direction,
+            });
+
+            remainingNames = remainingNames.slice(maxLabelsInRing);
+            radius += maxLabelWidth + ringPaddingPx;
+        }
+
+        updateRingTransforms();
+        ensureAnimation();
+    }
+
+    async function loadNames() {
+        const response = await fetch("./title.json");
+
+        if (!response.ok) {
+            throw new Error(`読み込みに失敗しました: ${response.status}`);
+        }
+
+        return response.json();
+    }
+
+    let names = [];
+
+    async function init() {
+        names = await loadNames();
+        renderLabels(names);
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+        if (names.length > 0) {
+            renderLabels(names);
+        }
+    });
+
+    resizeObserver.observe(center);
+
+    init().catch((error) => {
+        console.error(error);
+    });
+</script>
+
+</html>

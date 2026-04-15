@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>spider</title>
+    <style>
+        html,
+        body {
+            overflow: hidden;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #f0f0f0;
+            font-family: sans-serif;
+        }
+
+        .network {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 12vw;
+            height: 12vw;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            z-index: 2;
+        }
+
+        .center img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .line {
+            position: absolute;
+            height: 1px;
+            background: #9999996f;
+            transform-origin: left center;
+        }
+
+        .line-dot {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #999;
+            transform: translate(-50%, -50%);
+        }
+
+        .node {
+            position: absolute;
+            width: auto;
+            height: auto;
+            display: grid;
+            place-items: center;
+            font-size: 11px;
+            z-index: 1;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="network" id="network">
+        <div class="center">
+            <img src="/sample.png" alt="表情素材">
+        </div>
+    </div>
+
+    <script>
+        const repeatString = "hogehogehogehoge";
+        const repeatCount = 200;
+        const data = Array.from({ length: repeatCount }, (_, i) => `${repeatString}`);
+
+        const network = document.getElementById("network");
+        const center = network.querySelector(".center");
+
+        function getNodeRect(dotX, dotY, width, height, angle, gap) {
+
+            return {
+                left: Math.cos(angle) >= 0 ? dotX + gap : dotX - width - gap,
+                top: dotY - height / 2,
+                width,
+                height
+            };
+        }
+
+        function rectsOverlap(a, b, padding = 0) {
+            return !(
+                a.left + a.width + padding <= b.left ||
+                b.left + b.width + padding <= a.left ||
+                a.top + a.height + padding <= b.top ||
+                b.top + b.height + padding <= a.top
+            );
+        }
+
+        function clamp(value, min, max) {
+            return Math.min(Math.max(value, min), max);
+        }
+
+        function getEllipsePoint(cx, cy, radiusX, radiusY, angle) {
+            return {
+                x: cx + Math.cos(angle) * radiusX,
+                y: cy + Math.sin(angle) * radiusY
+            };
+        }
+
+        function getEllipseCircumference(radiusX, radiusY) {
+            const h = ((radiusX - radiusY) ** 2) / ((radiusX + radiusY) ** 2);
+            return Math.PI * (radiusX + radiusY) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
+        }
+
+        function blend(a, b, t) {
+            return a + (b - a) * t;
+        }
+
+        function buildRingPlan(count, minRadiusX, minRadiusY, maxRadiusX, maxRadiusY, ringSpacingX, ringSpacingY, nodeFootprint, gap) {
+            const rings = [];
+            let ringIndex = 0;
+            const nodePressure = clamp(count / 10, 1.5, 12);
+            const innerRingBoost = 3.2;
+
+            while (true) {
+                const radiusX = minRadiusX + ringIndex * ringSpacingX;
+                const radiusY = minRadiusY + ringIndex * ringSpacingY;
+                if ((radiusX > maxRadiusX || radiusY > maxRadiusY) && rings.length > 0) {
+                    break;
+                }
+
+                const circumference = getEllipseCircumference(radiusX, radiusY);
+                const densityTightening = Math.max(0.55, 1 - ringIndex * 0.08);
+                const slotWidth = Math.max((nodeFootprint + gap * 3.8) * densityTightening, 28);
+                const baseCapacity = Math.max(10, Math.floor(circumference / slotWidth));
+                const innerBias = Math.max(2, nodePressure - ringIndex * 0.38);
+                const fillRatio = clamp(0.64 + innerBias * 0.06, 0.6, 0.9);
+                const ringBoost = Math.max(1, innerRingBoost - ringIndex * 1.2);
+                const boostedCapacity = Math.max(baseCapacity, Math.floor(baseCapacity * ringBoost));
+                const preferredInnerCount = Math.max(
+                    12,
+                    Math.round(boostedCapacity * clamp(0.44 + innerBias * 0.05, 0.4, 0.72))
+                );
+                const capacity = Math.max(preferredInnerCount, boostedCapacity);
+                const targetCount = Math.max(preferredInnerCount, Math.floor(capacity * fillRatio));
+                const weight = capacity * clamp(1.85 - ringIndex * 0.22, 0.75, 1.85);
+
+                rings.push({
+                    radiusX,
+                    radiusY,
+                    capacity,
+                    targetCount,
+                    weight,
+                    itemCount: 0,
+                    angleOffset: ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(targetCount, 2)
+                });
+
+                ringIndex += 1;
+                if (rings.length >= count) {
+                    break;
+                }
+            }
+
+            const totalWeight = rings.reduce((sum, ring) => sum + ring.weight, 0) || 1;
+            let remaining = count;
+
+            rings.forEach(ring => {
+                const weightedShare = Math.floor((count * ring.weight) / totalWeight);
+                const seededCount = Math.min(
+                    ring.capacity,
+                    Math.max(0, Math.min(ring.targetCount, weightedShare))
+                );
+                ring.itemCount = seededCount;
+                remaining -= seededCount;
+            });
+
+            while (remaining > 0) {
+                const nextRing = rings
+                    .filter(ring => ring.itemCount < ring.capacity)
+                    .sort((a, b) => {
+                        const aFill = a.itemCount / Math.max(a.capacity, 1);
+                        const bFill = b.itemCount / Math.max(b.capacity, 1);
+                        if (aFill !== bFill) {
+                            return aFill - bFill;
+                        }
+
+                        return b.weight - a.weight;
+                    })[0];
+
+                if (!nextRing) {
+                    const spreadRing = rings
+                        .slice()
+                        .sort((a, b) => {
+                            if (a.itemCount !== b.itemCount) {
+                                return a.itemCount - b.itemCount;
+                            }
+
+                            return b.weight - a.weight;
+                        })[0];
+
+                    spreadRing.itemCount += 1;
+                    remaining -= 1;
+                    continue;
+                }
+
+                nextRing.itemCount += 1;
+                remaining -= 1;
+            }
+
+            return rings.map(({ radiusX, radiusY, itemCount, angleOffset }) => ({
+                radiusX,
+                radiusY,
+                itemCount,
+                angleOffset
+            }));
+        }
+
+        let animationFrameId = null;
+        let activeLayout = null;
+
+        function clearNetwork() {
+            network.querySelectorAll(".line, .line-dot, .node").forEach(el => el.remove());
+        }
+
+        function createRadialLayout(items) {
+            clearNetwork();
+
+            const rect = network.getBoundingClientRect();
+            const cx = rect.width / 2;
+            const cy = rect.height / 2;
+            const centerRect = center.getBoundingClientRect();
+            const centerRadiusX = centerRect.width / 2;
+            const centerRadiusY = centerRect.height / 2;
+            const gap = 6;
+            const count = items.length;
+            const placedNodeRects = [];
+
+            const probeNodes = items.map(label => {
+                const node = document.createElement("div");
+                node.className = "node";
+                node.textContent = label;
+                node.style.visibility = "hidden";
+                network.appendChild(node);
+
+                const { width, height } = node.getBoundingClientRect();
+
+                return { label, node, width, height };
+            });
+
+            const avgNodeWidth = probeNodes.reduce((sum, item) => sum + item.width, 0) / Math.max(count, 1);
+            const maxNodeWidth = probeNodes.reduce((max, item) => Math.max(max, item.width), 0);
+            const maxNodeHeight = probeNodes.reduce((max, item) => Math.max(max, item.height), 0);
+            const viewportBase = Math.min(rect.width, rect.height);
+            const nodeFootprint = clamp(
+                Math.max(avgNodeWidth, maxNodeHeight * 2.8, viewportBase * 0.085),
+                84,
+                160
+            );
+            const edgePadding = 0;
+            const minRadius = Math.max(centerRadiusX, centerRadiusY) + 72;
+            const maxRadius = Math.max(minRadius, Math.max(rect.width, rect.height) / 2 - edgePadding);
+            const ringSpacing = Math.max(nodeFootprint * 1.05, 84);
+            const ringPlan = buildRingPlan(
+                count,
+                minRadius,
+                minRadius,
+                maxRadius,
+                maxRadius,
+                ringSpacing,
+                ringSpacing,
+                nodeFootprint,
+                gap
+            );
+
+            let itemIndex = 0;
+            const placements = [];
+
+            ringPlan.forEach(({ radiusX, radiusY, itemCount, angleOffset }) => {
+                const step = (Math.PI * 2) / itemCount;
+
+                for (let ringItemIndex = 0; ringItemIndex < itemCount; ringItemIndex += 1) {
+                    const probe = probeNodes[itemIndex];
+                    if (!probe) {
+                        return;
+                    }
+
+                    const { node, width, height } = probe;
+                    const baseAngle = step * ringItemIndex - Math.PI / 2 + angleOffset;
+                    let selectedPlacement = null;
+
+                    for (let shiftIndex = 0; shiftIndex < 5; shiftIndex += 1) {
+                        const shift = shiftIndex === 0 ? 0 : (shiftIndex % 2 === 0 ? -1 : 1) * step * 0.18 * Math.ceil(shiftIndex / 2);
+                        const angle = baseAngle + shift;
+                        const { x: dotX, y: dotY } = getEllipsePoint(cx, cy, radiusX, radiusY, angle);
+                        const nodeRect = getNodeRect(dotX, dotY, width, height, angle, gap);
+                        const overlaps = placedNodeRects.some(existing =>
+                            rectsOverlap(nodeRect, existing, 8)
+                        );
+
+                        if (!overlaps) {
+                            selectedPlacement = { angle, dotX, dotY, nodeRect };
+                            break;
+                        }
+                    }
+
+                    if (!selectedPlacement) {
+                        const clampedAngle = clamp(baseAngle, -Math.PI * 1.5, Math.PI * 1.5);
+                        const { x: dotX, y: dotY } = getEllipsePoint(cx, cy, radiusX, radiusY, clampedAngle);
+                        const nodeRect = getNodeRect(dotX, dotY, width, height, clampedAngle, gap);
+                        selectedPlacement = { angle: clampedAngle, dotX, dotY, nodeRect };
+                    }
+
+                    const lineEl = document.createElement("div");
+                    lineEl.className = "line";
+                    network.appendChild(lineEl);
+
+                    const dot = document.createElement("div");
+                    dot.className = "line-dot";
+                    network.appendChild(dot);
+
+                    node.style.visibility = "visible";
+                    placedNodeRects.push(selectedPlacement.nodeRect);
+                    placements.push({
+                        baseAngle: selectedPlacement.angle,
+                        radiusX,
+                        radiusY,
+                        width,
+                        height,
+                        lineEl,
+                        dot,
+                        node
+                    });
+                    itemIndex += 1;
+                }
+            });
+
+            return {
+                cx,
+                cy,
+                centerRadiusX,
+                centerRadiusY,
+                gap,
+                placements
+            };
+        }
+
+        function updateRadialLayout(layout, rotationAngle) {
+            layout.placements.forEach(({ baseAngle, width, height, radiusX, radiusY, lineEl, dot, node }) => {
+                const angle = baseAngle + rotationAngle;
+                const { x: dotX, y: dotY } = getEllipsePoint(layout.cx, layout.cy, radiusX, radiusY, angle);
+                const nodeRect = getNodeRect(dotX, dotY, width, height, angle, layout.gap);
+                const { x: startX, y: startY } = getEllipsePoint(
+                    layout.cx,
+                    layout.cy,
+                    layout.centerRadiusX,
+                    layout.centerRadiusY,
+                    angle
+                );
+                const dx = dotX - startX;
+                const dy = dotY - startY;
+                const deg = Math.atan2(dy, dx) * 180 / Math.PI;
+                const length = Math.sqrt(dx * dx + dy * dy);
+
+                lineEl.style.left = `${startX}px`;
+                lineEl.style.top = `${startY}px`;
+                lineEl.style.width = `${length}px`;
+                lineEl.style.transform = `rotate(${deg}deg)`;
+
+                dot.style.left = `${dotX}px`;
+                dot.style.top = `${dotY}px`;
+
+                node.style.left = `${nodeRect.left}px`;
+                node.style.top = `${nodeRect.top}px`;
+            });
+        }
+
+        function renderRadialNetwork(items) {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+
+            activeLayout = createRadialLayout(items);
+            const rotationSpeed = 0.00008;
+            const startedAt = performance.now();
+
+            const tick = now => {
+                const rotationAngle = (now - startedAt) * rotationSpeed;
+                updateRadialLayout(activeLayout, rotationAngle);
+                animationFrameId = requestAnimationFrame(tick);
+            };
+
+            updateRadialLayout(activeLayout, 0);
+            animationFrameId = requestAnimationFrame(tick);
+        }
+
+        renderRadialNetwork(data);
+
+        window.addEventListener("resize", () => {
+            renderRadialNetwork(data);
+        });
+    </script>
+</body>
+
+</html>
