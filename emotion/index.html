@@ -106,21 +106,36 @@
             stroke: rgba(27, 32, 38, 0.42);
         }
 
-        .circumplex-label,
-        .circumplex-caption {
+        .circumplex-label {
             fill: #1b2026;
             font-size: 10px;
             text-anchor: middle;
             dominant-baseline: middle;
         }
 
-        .circumplex-caption {
-            font-size: 8px;
-            fill: rgba(27, 32, 38, 0.82);
-        }
-
         .circumplex-point {
             fill: var(--accent);
+        }
+
+        .color-field {
+            width: min(86vmin, 700px);
+            height: min(86vmin, 700px);
+            position: relative;
+            display: grid;
+            place-items: center;
+            pointer-events: none;
+        }
+
+        .color-field::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at center, rgba(var(--emotion-rgb, 255, 255, 255), var(--emotion-alpha, 0)) 0%, rgba(var(--emotion-rgb, 255, 255, 255), calc(var(--emotion-alpha, 0) * 0.6)) 32%, rgba(var(--emotion-rgb, 255, 255, 255), 0) 74%);
+            filter: blur(24px);
+            transform: scale(1.04);
+            transition: background 120ms linear;
         }
 
         .panel,
@@ -258,6 +273,10 @@
             <circle id="circumplexPoint" class="circumplex-point" cx="100" cy="100" r="6"></circle>
         </svg>
     </section>
+    <section id="visualize_03" class="visualize" hidden>
+        <div id="colorField" class="color-field" aria-label="emotion color field">
+        </div>
+    </section>
     <main>
         <video id="video" autoplay muted playsinline></video>
         <img id="image" alt="インポートした画像" hidden>
@@ -284,6 +303,14 @@
             const RADAR_RADIUS = 72;
             const CIRCUMPLEX_CENTER = 100;
             const CIRCUMPLEX_RADIUS = 72;
+            const EMOTION_COLORS = {
+                happy: [255, 210, 58],
+                sad: [34, 66, 168],
+                angry: [142, 18, 28],
+                fearful: [104, 66, 156],
+                disgusted: [76, 138, 74],
+                surprised: [255, 149, 46]
+            };
             const SOURCE_LABELS = {
                 camera: "カメラ",
                 "image-file": "画像ファイル",
@@ -304,6 +331,7 @@
             const radarLabels = document.getElementById("radarLabels");
             const radarShape = document.getElementById("radarShape");
             const circumplexPoint = document.getElementById("circumplexPoint");
+            const colorField = document.getElementById("colorField");
             const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
 
             let running = false;
@@ -335,6 +363,44 @@
                 return {
                     x: x / magnitude,
                     y: y / magnitude
+                };
+            }
+
+            function mixEmotionColor(expressions = {}) {
+                const activeEmotions = [];
+                let totalWeight = 0;
+                let weightedRed = 0;
+                let weightedGreen = 0;
+                let weightedBlue = 0;
+
+                Object.entries(EMOTION_COLORS).forEach(([name, color]) => {
+                    const score = clampScore(expressions[name]);
+
+                    if (score <= 0) {
+                        return;
+                    }
+
+                    activeEmotions.push({ name, score });
+                    weightedRed += color[0] * score;
+                    weightedGreen += color[1] * score;
+                    weightedBlue += color[2] * score;
+                    totalWeight += score;
+                });
+
+                if (totalWeight === 0) {
+                    return {
+                        rgb: "255, 255, 255",
+                        alpha: "0"
+                    };
+                }
+
+                activeEmotions.sort((left, right) => right.score - left.score);
+                const dominantScore = activeEmotions[0].score;
+                const alpha = Math.min(0.92, Math.max(dominantScore * 0.9, totalWeight / 2.4));
+
+                return {
+                    rgb: `${Math.round(weightedRed / totalWeight)}, ${Math.round(weightedGreen / totalWeight)}, ${Math.round(weightedBlue / totalWeight)}`,
+                    alpha: alpha.toFixed(3)
                 };
             }
 
@@ -409,6 +475,13 @@
                 circumplexPoint.setAttribute("cy", y);
             }
 
+            function updateColorField(expressions = {}) {
+                const { rgb, alpha } = mixEmotionColor(expressions);
+
+                colorField.style.setProperty("--emotion-rgb", rgb);
+                colorField.style.setProperty("--emotion-alpha", alpha);
+            }
+
             function updatePanelVisibility() {
                 const hasVisibleLayer = [...layerControls.querySelectorAll("input")]
                     .some((checkbox) => checkbox.checked);
@@ -461,6 +534,7 @@
 
                 updateRadarChart(expressions);
                 updateCircumplexChart(expressions);
+                updateColorField(expressions);
             }
 
             function stopCameraStream() {
