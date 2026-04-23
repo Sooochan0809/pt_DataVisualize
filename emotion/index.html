@@ -233,6 +233,7 @@
         window.addEventListener("load", () => {
             const MODEL_URL = "../faceAPI/models";
             const MAX_CAMERA_SIZE = 4096;
+            const DETECTION_OPTIONS = new faceapi.TinyFaceDetectorOptions();
             const RADAR_AXES = ["happy", "surprised", "fearful", "sad", "disgusted", "angry"];
             const RADAR_CENTER = 100;
             const RADAR_RADIUS = 72;
@@ -410,14 +411,22 @@
                 status.textContent = message;
             }
 
+            function formatStatus(...parts) {
+                return parts.filter(Boolean).join(" / ");
+            }
+
+            function showDetectionError(error) {
+                updateStatus(`推定エラー: ${error.message}`);
+            }
+
             function updateDetectionStatus(detections) {
                 const state = detections.length ? "検出中" : "顔が見つかりません";
-                updateStatus([SOURCE_LABELS[activeMode], mediaSize, state].filter(Boolean).join(" / "));
+                updateStatus(formatStatus(SOURCE_LABELS[activeMode], mediaSize, state));
             }
 
             async function runDetection() {
                 const detections = await faceapi
-                    .detectAllFaces(activeMedia, new faceapi.TinyFaceDetectorOptions())
+                    .detectAllFaces(activeMedia, DETECTION_OPTIONS)
                     .withFaceExpressions();
 
                 updateExpressions(detections[0]?.expressions);
@@ -432,7 +441,7 @@
                 try {
                     await runDetection();
                 } catch (error) {
-                    updateStatus(`推定エラー: ${error.message}`);
+                    showDetectionError(error);
                 }
 
                 if (running && token === detectToken) {
@@ -445,7 +454,7 @@
                 try {
                     await runDetection();
                 } catch (error) {
-                    updateStatus(`推定エラー: ${error.message}`);
+                    showDetectionError(error);
                 }
             }
 
@@ -469,7 +478,7 @@
 
                     const settings = video.srcObject.getVideoTracks()[0].getSettings();
                     setActiveMedia(video, "camera", `${settings.width}x${settings.height}`);
-                    updateStatus(`${SOURCE_LABELS.camera} / ${mediaSize}`);
+                    updateStatus(formatStatus(SOURCE_LABELS.camera, mediaSize));
                     running = true;
                     detect();
                 } catch (error) {
