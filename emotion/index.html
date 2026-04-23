@@ -8,6 +8,7 @@
     <script defer src="../faceAPI/face-api.min.js"></script>
     <style>
         body {
+            position: relative;
             margin: 0;
             padding: 0;
             height: 100dvh;
@@ -25,11 +26,25 @@
             object-fit: cover;
         }
 
-        .camera {
+        main {
             position: relative;
             width: min(100vw, 75vh);
             height: min(100vh, 133.333vw);
             aspect-ratio: 3 / 4;
+            overflow: hidden;
+        }
+
+        .visualize {
+            position: fixed;
+            inset: 0;
+            background-color: #f0f0f07d;
+            ;
+        }
+
+        .camera {
+            position: relative;
+            width: 100%;
+            height: 100%;
             overflow: hidden;
         }
 
@@ -41,6 +56,31 @@
             padding: 16px;
             border-radius: 8px;
             background: rgba(27, 32, 38, 0.88);
+        }
+
+        .layer-controls {
+            position: fixed;
+            width: auto;
+            right: 1rem;
+            bottom: 1rem;
+            z-index: 999;
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(27, 32, 38, 0.88);
+        }
+
+        .layer-controls label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .layer-controls input {
+            accent-color: #42d392;
         }
 
         .bar-row {
@@ -74,26 +114,71 @@
 
         @media (max-width: 800px) {
             .panel {
-                right: 8px;
+                left: 8px;
                 bottom: 8px;
                 padding: 12px;
+            }
+
+            .layer-controls {
+                right: 8px;
+                bottom: 8px;
             }
         }
     </style>
 </head>
 
 <body>
-    <main class="camera">
-        <video id="video" autoplay muted playsinline></video>
-        <aside class="panel">
-            <span id="status">モデル読み込み中...</span>
-            <div id="bars"></div>
-        </aside>
+    <section id="visualize_01" class="visualize">
+    </section>
+    <section id="visualize_02" class="visualize">
+    </section>
+    <section id="visualize_03" class="visualize">
+    </section>
+
+    <div id="layerControls" class="layer-controls"></div>
+
+    <main>
+        <div class="camera">
+            <video id="video" autoplay muted playsinline></video>
+            <aside class="panel">
+                <span id="status">モデル読み込み中...</span>
+                <div id="bars"></div>
+            </aside>
+        </div>
     </main>
 
     <script>
         window.addEventListener("load", () => {
             const MODEL_URL = "../faceAPI/models";
+
+            const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
+            const layerControls = document.getElementById("layerControls");
+
+            visualizeSections.forEach((section) => {
+                const layer = Number(section.id.replace("visualize_", ""));
+                section.style.zIndex = String(10 + layer);
+                section.hidden = true;
+            });
+
+            layerControls.innerHTML = visualizeSections.map((section) => `
+                <label>
+                    <input type="checkbox" data-target="${section.id}">
+                    <span>${section.id}</span>
+                </label>
+            `).join("");
+
+            layerControls.addEventListener("change", (event) => {
+                const input = event.target;
+
+                if (!(input instanceof HTMLInputElement)) {
+                    return;
+                }
+
+                const target = document.getElementById(input.dataset.target);
+                if (target) {
+                    target.hidden = !input.checked;
+                }
+            });
 
             const video = document.getElementById("video");
             const status = document.getElementById("status");
