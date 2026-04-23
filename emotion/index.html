@@ -297,12 +297,7 @@
         window.addEventListener("load", () => {
             const MODEL_URL = "../faceAPI/models";
             const MAX_CAMERA_SIZE = 4096;
-            const DETECTION_OPTIONS = new faceapi.TinyFaceDetectorOptions();
             const RADAR_AXES = ["happy", "surprised", "fearful", "sad", "disgusted", "angry"];
-            const RADAR_CENTER = 100;
-            const RADAR_RADIUS = 72;
-            const CIRCUMPLEX_CENTER = 100;
-            const CIRCUMPLEX_RADIUS = 72;
             const EMOTION_COLORS = {
                 happy: [255, 210, 58],
                 sad: [34, 66, 168],
@@ -316,23 +311,31 @@
                 "image-file": "画像ファイル",
                 "video-file": "動画ファイル"
             };
+            const $ = (id) => document.getElementById(id);
+            const clamp = (n, min = 0, max = 1) => Math.min(max, Math.max(min, Number(n || 0)));
+            const point = (i, r) => {
+                const a = -Math.PI / 2 + (Math.PI * 2 * i) / RADAR_AXES.length;
+                return [100 + Math.cos(a) * r, 100 + Math.sin(a) * r];
+            };
+            const polygon = (radiusFn) => RADAR_AXES.map((name, i) => point(i, radiusFn(name)).join(",")).join(" ");
+            const formatStatus = (...parts) => parts.filter(Boolean).join(" / ");
+            const detectOptions = new faceapi.TinyFaceDetectorOptions();
 
             const stage = document.querySelector("main");
-            const video = document.getElementById("video");
-            const image = document.getElementById("image");
-            const status = document.getElementById("status");
-            const bars = document.getElementById("bars");
             const panel = document.querySelector(".panel");
-            const cameraButton = document.getElementById("cameraButton");
-            const fileInput = document.getElementById("fileInput");
-            const layerControls = document.getElementById("layerControls");
-            const radarAxes = document.getElementById("radarAxes");
-            const radarGrid = document.getElementById("radarGrid");
-            const radarLabels = document.getElementById("radarLabels");
-            const radarShape = document.getElementById("radarShape");
-            const circumplexPoint = document.getElementById("circumplexPoint");
-            const colorField = document.getElementById("colorField");
-            const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
+            const video = $("video");
+            const image = $("image");
+            const status = $("status");
+            const bars = $("bars");
+            const fileInput = $("fileInput");
+            const layerControls = $("layerControls");
+            const radarGrid = $("radarGrid");
+            const radarAxes = $("radarAxes");
+            const radarLabels = $("radarLabels");
+            const radarShape = $("radarShape");
+            const circumplexPoint = $("circumplexPoint");
+            const colorField = $("colorField");
+            const sections = [...document.querySelectorAll('section[id^="visualize_"]')];
 
             let running = false;
             let mediaSize = "";
@@ -341,188 +344,79 @@
             let activeObjectUrl = "";
             let detectToken = 0;
 
-            function clampScore(score) {
-                return Math.min(1, Math.max(0, Number(score || 0)));
-            }
-
-            function clampSigned(score) {
-                return Math.min(1, Math.max(-1, Number(score || 0)));
-            }
-
-            function maxScore(expressions, keys) {
-                return keys.reduce((max, key) => Math.max(max, clampScore(expressions[key])), 0);
-            }
-
-            function normalizeToUnitCircle(x, y) {
-                const magnitude = Math.hypot(x, y);
-
-                if (magnitude <= 1 || magnitude === 0) {
-                    return { x, y };
-                }
-
-                return {
-                    x: x / magnitude,
-                    y: y / magnitude
+            const updateStatus = (message) => { status.textContent = message; };
+            const showDetectionError = (error) => updateStatus(`推定エラー: ${error.message}`);
+            const stopDetection = () => { running = false; detectToken += 1; };
+            const stopCameraStream = () => {
+                const stream = video.srcObject instanceof MediaStream ? video.srcObject : null;
+                if (stream) stream.getTracks().forEach((track) => track.stop());
+                video.srcObject = null;
+            };
+            const clearImportedFile = () => {
+                if (activeObjectUrl) URL.revokeObjectURL(activeObjectUrl);
+                activeObjectUrl = "";
+                image.removeAttribute("src");
+                video.removeAttribute("src");
+                video.load();
+                fileInput.value = "";
+            };
+            const formatMediaSize = (media) => {
+                const width = media.videoWidth || media.naturalWidth || media.width;
+                const height = media.videoHeight || media.naturalHeight || media.height;
+                return width && height ? `${width}x${height}` : "";
+            };
+            const setActiveMedia = (media, mode, size = "") => {
+                activeMedia = media;
+                activeMode = mode;
+                mediaSize = size;
+                stage.classList.toggle("file-source", mode !== "camera");
+                image.hidden = media !== image;
+                video.hidden = media !== video;
+                video.controls = video.loop = mode === "video-file";
+            };
+            const loadMedia = (media, src, eventName) => new Promise((resolve, reject) => {
+                const done = () => {
+                    media.removeEventListener(eventName, onLoad);
+                    media.removeEventListener("error", onError);
                 };
-            }
+                const onLoad = () => { done(); resolve(); };
+                const onError = () => { done(); reject(new Error("ファイルを読み込めません")); };
+                media.addEventListener(eventName, onLoad, { once: true });
+                media.addEventListener("error", onError, { once: true });
+                media.src = src;
+                media.load?.();
+            });
 
-            function mixEmotionColor(expressions = {}) {
-                const activeEmotions = [];
-                let totalWeight = 0;
-                let weightedRed = 0;
-                let weightedGreen = 0;
-                let weightedBlue = 0;
+            radarGrid.innerHTML = [0.25, 0.5, 0.75, 1].map((scale) => `<polygon class="radar-grid" points="${polygon(() => 72 * scale)}"></polygon>`).join("");
+            radarAxes.innerHTML = RADAR_AXES.map((_, i) => {
+                const [x, y] = point(i, 72);
+                return `<line class="radar-axis" x1="100" y1="100" x2="${x}" y2="${y}"></line>`;
+            }).join("");
+            radarLabels.innerHTML = RADAR_AXES.map((name, i) => {
+                const [x, y] = point(i, 90);
+                return `<text class="radar-label" x="${x}" y="${y}">${name}</text>`;
+            }).join("");
 
-                Object.entries(EMOTION_COLORS).forEach(([name, color]) => {
-                    const score = clampScore(expressions[name]);
+            sections.forEach((section) => {
+                section.style.zIndex = String(10 + Number(section.id.replace("visualize_", "")));
+                section.hidden = true;
+            });
+            layerControls.innerHTML = sections.map((section) => `
+                <label>
+                    <input type="checkbox" data-target="${section.id}">
+                    <span>${section.id}</span>
+                </label>
+            `).join("");
+            layerControls.addEventListener("change", ({ target }) => {
+                if (!(target instanceof HTMLInputElement)) return;
+                const section = $(target.dataset.target);
+                if (section) section.hidden = !target.checked;
+                panel.hidden = [...layerControls.querySelectorAll("input")].some((input) => input.checked);
+            });
 
-                    if (score <= 0) {
-                        return;
-                    }
-
-                    activeEmotions.push({ name, score });
-                    weightedRed += color[0] * score;
-                    weightedGreen += color[1] * score;
-                    weightedBlue += color[2] * score;
-                    totalWeight += score;
-                });
-
-                if (totalWeight === 0) {
-                    return {
-                        rgb: "255, 255, 255",
-                        alpha: "0"
-                    };
-                }
-
-                activeEmotions.sort((left, right) => right.score - left.score);
-                const dominantScore = activeEmotions[0].score;
-                const alpha = Math.min(0.92, Math.max(dominantScore * 0.9, totalWeight / 2.4));
-
-                return {
-                    rgb: `${Math.round(weightedRed / totalWeight)}, ${Math.round(weightedGreen / totalWeight)}, ${Math.round(weightedBlue / totalWeight)}`,
-                    alpha: alpha.toFixed(3)
-                };
-            }
-
-            function deriveCircumplex(expressions = {}) {
-                const happiness = clampScore(expressions.happy);
-                const anger = clampScore(expressions.angry);
-                const disgust = clampScore(expressions.disgusted);
-                const fear = clampScore(expressions.fearful);
-                const sadness = clampScore(expressions.sad);
-                // face-api does not expose contempt, so approximate it from nearby negative expressions.
-                const contempt = (anger + disgust) / 2;
-
-                const pleasantness = clampSigned(
-                    happiness - ((anger + contempt + disgust + fear + sadness) / 5)
-                );
-                const arousal = clampSigned(
-                    maxScore(expressions, ["angry", "fearful", "surprised", "happy"]) -
-                    sadness
-                );
-
-                return { pleasantness, arousal };
-            }
-
-            function radarPoint(index, radius) {
-                const angle = -Math.PI / 2 + (Math.PI * 2 * index) / RADAR_AXES.length;
-
-                return {
-                    x: RADAR_CENTER + Math.cos(angle) * radius,
-                    y: RADAR_CENTER + Math.sin(angle) * radius
-                };
-            }
-
-            function polygonPoints(radius) {
-                return RADAR_AXES.map((_, index) => {
-                    const point = radarPoint(index, radius);
-                    return `${point.x},${point.y}`;
-                }).join(" ");
-            }
-
-            function initializeRadarChart() {
-                radarGrid.innerHTML = [0.25, 0.5, 0.75, 1].map((scale) => `
-                    <polygon class="radar-grid" points="${polygonPoints(RADAR_RADIUS * scale)}"></polygon>
-                `).join("");
-
-                radarAxes.innerHTML = RADAR_AXES.map((_, index) => {
-                    const point = radarPoint(index, RADAR_RADIUS);
-                    return `<line class="radar-axis" x1="${RADAR_CENTER}" y1="${RADAR_CENTER}" x2="${point.x}" y2="${point.y}"></line>`;
-                }).join("");
-
-                radarLabels.innerHTML = RADAR_AXES.map((name, index) => {
-                    const point = radarPoint(index, RADAR_RADIUS + 18);
-                    return `<text class="radar-label" x="${point.x}" y="${point.y}">${name}</text>`;
-                }).join("");
-
-                updateRadarChart();
-            }
-
-            function updateRadarChart(expressions = {}) {
-                radarShape.setAttribute("points", RADAR_AXES.map((name, index) => {
-                    const point = radarPoint(index, RADAR_RADIUS * clampScore(expressions[name]));
-                    return `${point.x},${point.y}`;
-                }).join(" "));
-            }
-
-            function updateCircumplexChart(expressions = {}) {
-                const { pleasantness, arousal } = deriveCircumplex(expressions);
-                const normalized = normalizeToUnitCircle(pleasantness, arousal);
-                const x = CIRCUMPLEX_CENTER + normalized.x * CIRCUMPLEX_RADIUS;
-                const y = CIRCUMPLEX_CENTER - normalized.y * CIRCUMPLEX_RADIUS;
-
-                circumplexPoint.setAttribute("cx", x);
-                circumplexPoint.setAttribute("cy", y);
-            }
-
-            function updateColorField(expressions = {}) {
-                const { rgb, alpha } = mixEmotionColor(expressions);
-
-                colorField.style.setProperty("--emotion-rgb", rgb);
-                colorField.style.setProperty("--emotion-alpha", alpha);
-            }
-
-            function updatePanelVisibility() {
-                const hasVisibleLayer = [...layerControls.querySelectorAll("input")]
-                    .some((checkbox) => checkbox.checked);
-
-                panel.hidden = hasVisibleLayer;
-            }
-
-            function initializeLayerControls() {
-                visualizeSections.forEach((section) => {
-                    const layer = Number(section.id.replace("visualize_", ""));
-                    section.style.zIndex = String(10 + layer);
-                    section.hidden = true;
-                });
-
-                layerControls.innerHTML = visualizeSections.map((section) => `
-                    <label>
-                        <input type="checkbox" data-target="${section.id}">
-                        <span>${section.id}</span>
-                    </label>
-                `).join("");
-
-                layerControls.addEventListener("change", (event) => {
-                    const input = event.target;
-
-                    if (input instanceof HTMLInputElement) {
-                        const target = document.getElementById(input.dataset.target);
-                        if (target) {
-                            target.hidden = !input.checked;
-                        }
-
-                        updatePanelVisibility();
-                    }
-                });
-
-                updatePanelVisibility();
-            }
-
-            function updateExpressions(expressions = {}) {
+            const updateExpressions = (expressions = {}) => {
                 bars.innerHTML = Object.entries(expressions).map(([name, score]) => {
-                    const value = clampScore(score);
-
+                    const value = clamp(score);
                     return `
                         <div class="bar-row">
                             <span>${name}</span>
@@ -532,112 +426,59 @@
                     `;
                 }).join("");
 
-                updateRadarChart(expressions);
-                updateCircumplexChart(expressions);
-                updateColorField(expressions);
-            }
+                radarShape.setAttribute("points", polygon((name) => 72 * clamp(expressions[name])));
 
-            function stopCameraStream() {
-                const stream = video.srcObject instanceof MediaStream ? video.srcObject : null;
+                const get = (name) => clamp(expressions[name]);
+                const happy = get("happy");
+                const angry = get("angry");
+                const disgusted = get("disgusted");
+                const fearful = get("fearful");
+                const sad = get("sad");
+                let x = clamp(happy - ((angry + (angry + disgusted) / 2 + disgusted + fearful + sad) / 5), -1, 1);
+                let y = clamp(Math.max(angry, fearful, get("surprised"), happy) - sad, -1, 1);
+                const scale = Math.max(1, Math.hypot(x, y));
+                x /= scale;
+                y /= scale;
+                circumplexPoint.setAttribute("cx", 100 + x * 72);
+                circumplexPoint.setAttribute("cy", 100 - y * 72);
 
-                if (stream) {
-                    stream.getTracks().forEach((track) => track.stop());
-                    video.srcObject = null;
-                }
-            }
+                const mixed = Object.entries(EMOTION_COLORS).reduce((acc, [name, [r, g, b]]) => {
+                    const score = get(name);
+                    return score ? {
+                        total: acc.total + score,
+                        peak: Math.max(acc.peak, score),
+                        r: acc.r + r * score,
+                        g: acc.g + g * score,
+                        b: acc.b + b * score
+                    } : acc;
+                }, { total: 0, peak: 0, r: 0, g: 0, b: 0 });
+                colorField.style.setProperty("--emotion-rgb",
+                    mixed.total ? `${Math.round(mixed.r / mixed.total)}, ${Math.round(mixed.g / mixed.total)}, ${Math.round(mixed.b / mixed.total)}` : "255, 255, 255");
+                colorField.style.setProperty("--emotion-alpha",
+                    mixed.total ? Math.min(0.92, Math.max(mixed.peak * 0.9, mixed.total / 2.4)).toFixed(3) : "0");
+            };
 
-            function clearImportedFile() {
-                if (activeObjectUrl) {
-                    URL.revokeObjectURL(activeObjectUrl);
-                    activeObjectUrl = "";
-                }
+            const runDetection = async () => {
+                const detections = await faceapi.detectAllFaces(activeMedia, detectOptions).withFaceExpressions();
+                updateExpressions(detections[0]?.expressions || {});
+                updateStatus(formatStatus(SOURCE_LABELS[activeMode], mediaSize, detections.length ? "検出中" : "顔が見つかりません"));
+            };
 
-                image.removeAttribute("src");
-                video.removeAttribute("src");
-                video.load();
-                fileInput.value = "";
-            }
-
-            function stopDetection() {
-                running = false;
-                detectToken += 1;
-            }
-
-            function setActiveMedia(media, mode, sizeText = "") {
-                activeMedia = media;
-                activeMode = mode;
-                mediaSize = sizeText;
-                stage.classList.toggle("file-source", mode !== "camera");
-                image.hidden = media !== image;
-                video.hidden = media !== video;
-                video.controls = mode === "video-file";
-                video.loop = mode === "video-file";
-            }
-
-            function formatMediaSize(media) {
-                const width = media.videoWidth || media.naturalWidth || media.width;
-                const height = media.videoHeight || media.naturalHeight || media.height;
-
-                return width && height ? `${width}x${height}` : "";
-            }
-
-            function updateStatus(message) {
-                status.textContent = message;
-            }
-
-            function formatStatus(...parts) {
-                return parts.filter(Boolean).join(" / ");
-            }
-
-            function showDetectionError(error) {
-                updateStatus(`推定エラー: ${error.message}`);
-            }
-
-            function updateDetectionStatus(detections) {
-                const state = detections.length ? "検出中" : "顔が見つかりません";
-                updateStatus(formatStatus(SOURCE_LABELS[activeMode], mediaSize, state));
-            }
-
-            async function runDetection() {
-                const detections = await faceapi
-                    .detectAllFaces(activeMedia, DETECTION_OPTIONS)
-                    .withFaceExpressions();
-
-                updateExpressions(detections[0]?.expressions);
-                updateDetectionStatus(detections);
-            }
-
-            async function detect(token = detectToken) {
-                if (!running) {
-                    return;
-                }
-
+            const detect = async (token = detectToken) => {
+                if (!running) return;
                 try {
                     await runDetection();
                 } catch (error) {
                     showDetectionError(error);
                 }
+                if (running && token === detectToken) requestAnimationFrame(() => detect(token));
+            };
 
-                if (running && token === detectToken) {
-                    requestAnimationFrame(() => detect(token));
-                }
-            }
-
-            async function detectOnce() {
-                stopDetection();
-                try {
-                    await runDetection();
-                } catch (error) {
-                    showDetectionError(error);
-                }
-            }
-
-            async function startCamera() {
+            const startCamera = async () => {
                 updateStatus("カメラ起動中...");
                 stopDetection();
                 stopCameraStream();
                 clearImportedFile();
-
                 try {
                     video.srcObject = await navigator.mediaDevices.getUserMedia({
                         video: {
@@ -647,9 +488,7 @@
                         },
                         audio: false
                     });
-
                     await video.play();
-
                     const settings = video.srcObject.getVideoTracks()[0].getSettings();
                     setActiveMedia(video, "camera", `${settings.width}x${settings.height}`);
                     updateStatus(formatStatus(SOURCE_LABELS.camera, mediaSize));
@@ -658,51 +497,10 @@
                 } catch (error) {
                     updateStatus(`カメラを開始できません: ${error.message}`);
                 }
-            }
+            };
 
-            function waitForMediaLoad(media, eventName) {
-                return new Promise((resolve, reject) => {
-                    const cleanup = () => {
-                        media.removeEventListener(eventName, handleLoad);
-                        media.removeEventListener("error", handleError);
-                    };
-                    const handleLoad = () => {
-                        cleanup();
-                        resolve();
-                    };
-                    const handleError = () => {
-                        cleanup();
-                        reject(new Error("ファイルを読み込めません"));
-                    };
-
-                    media.addEventListener(eventName, handleLoad, { once: true });
-                    media.addEventListener("error", handleError, { once: true });
-                });
-            }
-
-            function loadFileMedia(media, source, eventName) {
-                const loaded = waitForMediaLoad(media, eventName);
-                media.src = source;
-                media.load?.();
-                return loaded;
-            }
-
-            async function startVideoFile() {
-                try {
-                    running = true;
-                    await video.play();
-                    detect();
-                } catch (error) {
-                    stopDetection();
-                    updateStatus("動画を再生すると検出を開始します");
-                }
-            }
-
-            async function importFile(file) {
-                if (!file) {
-                    return;
-                }
-
+            const importFile = async (file) => {
+                if (!file) return;
                 stopDetection();
                 stopCameraStream();
                 clearImportedFile();
@@ -710,34 +508,36 @@
 
                 if (file.type.startsWith("image/")) {
                     updateStatus("画像ファイル読み込み中...");
-                    await loadFileMedia(image, activeObjectUrl, "load");
+                    await loadMedia(image, activeObjectUrl, "load");
                     setActiveMedia(image, "image-file", formatMediaSize(image));
-                    await detectOnce();
+                    try {
+                        await runDetection();
+                    } catch (error) {
+                        showDetectionError(error);
+                    }
                     return;
                 }
 
                 if (file.type.startsWith("video/")) {
                     updateStatus("動画ファイル読み込み中...");
-                    await loadFileMedia(video, activeObjectUrl, "loadedmetadata");
+                    await loadMedia(video, activeObjectUrl, "loadedmetadata");
                     setActiveMedia(video, "video-file", formatMediaSize(video));
-                    await startVideoFile();
+                    try {
+                        running = true;
+                        await video.play();
+                        detect();
+                    } catch (error) {
+                        stopDetection();
+                        updateStatus("動画を再生すると検出を開始します");
+                    }
                     return;
                 }
 
                 clearImportedFile();
                 updateStatus("画像または動画ファイルを選択してください");
-            }
+            };
 
-            async function loadModels() {
-                await Promise.all([
-                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-                    faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-                ]);
-
-                startCamera();
-            }
-
-            cameraButton.addEventListener("click", startCamera);
+            $("cameraButton").addEventListener("click", startCamera);
             fileInput.addEventListener("change", (event) => {
                 importFile(event.target.files[0]).catch((error) => {
                     updateStatus(`ファイルを読み込めません: ${error.message}`);
@@ -751,14 +551,14 @@
                 }
             });
             video.addEventListener("pause", () => {
-                if (activeMode === "video-file") {
-                    stopDetection();
-                }
+                if (activeMode === "video-file") stopDetection();
             });
 
-            initializeLayerControls();
-            initializeRadarChart();
-            loadModels().catch((error) => {
+            updateExpressions();
+            Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+            ]).then(startCamera).catch((error) => {
                 updateStatus(`モデルを読み込めません: ${error.message}`);
             });
         });
