@@ -7,68 +7,61 @@
     <title>Emotion Demo</title>
     <script defer src="../faceAPI/face-api.min.js"></script>
     <style>
-        body {
-            position: relative;
-            margin: 0;
-            padding: 0;
-            height: 100dvh;
-            display: grid;
-            place-items: center;
-            background-color: #f0f0f0;
-            color: #f4f7fb;
-            font-family: "Yu Gothic Medium", "Yu Gothic", sans-serif;
+        :root {
+            --panel-bg: rgba(27, 32, 38, 0.88);
+            --accent: #42d392;
         }
 
-        video {
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
+        body {
+            margin: 0;
+            min-height: 100dvh;
+            display: grid;
+            place-items: center;
+            background: #f0f0f0;
+            color: #f4f7fb;
+            font-family: "Yu Gothic Medium", "Yu Gothic", sans-serif;
         }
 
         main {
             position: relative;
             width: min(100vw, 75vh);
-            height: min(100vh, 133.333vw);
             aspect-ratio: 3 / 4;
             overflow: hidden;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .visualize {
             position: fixed;
             inset: 0;
-            background-color: #f0f0f07d;
-            ;
+            background: #f0f0f07d;
         }
 
-        .camera {
-            position: relative;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
+        .panel,
+        .layer-controls {
+            padding: 12px;
+            border-radius: 8px;
+            background: var(--panel-bg);
         }
 
         .panel {
             position: absolute;
-            bottom: 1rem;
             right: 1rem;
-            width: min(240px, calc(100% - 16px));
-            padding: 16px;
-            border-radius: 8px;
-            background: rgba(27, 32, 38, 0.88);
+            bottom: 1rem;
+            width: min(240px, calc(100% - 2rem));
         }
 
         .layer-controls {
             position: fixed;
-            width: auto;
             right: 1rem;
             bottom: 1rem;
             z-index: 999;
             display: grid;
             gap: 8px;
-            padding: 12px;
-            border-radius: 8px;
-            background: rgba(27, 32, 38, 0.88);
         }
 
         .layer-controls label {
@@ -79,8 +72,8 @@
             cursor: pointer;
         }
 
-        .layer-controls input {
-            accent-color: #42d392;
+        input[type="checkbox"] {
+            accent-color: var(--accent);
         }
 
         .bar-row {
@@ -99,24 +92,23 @@
 
         .bar {
             height: 7px;
-            border-radius: 999px;
             overflow: hidden;
+            border-radius: 999px;
             background: #101419;
         }
 
         .fill {
             display: block;
-            width: 0%;
             height: 100%;
-            background: #42d392;
+            background: var(--accent);
             transition: width 120ms linear;
         }
 
         @media (max-width: 800px) {
             .panel {
-                left: 8px;
+                right: 8px;
                 bottom: 8px;
-                padding: 12px;
+                width: min(240px, calc(100% - 16px));
             }
 
             .layer-controls {
@@ -128,68 +120,67 @@
 </head>
 
 <body>
-    <section id="visualize_01" class="visualize">
-    </section>
-    <section id="visualize_02" class="visualize">
-    </section>
-    <section id="visualize_03" class="visualize">
-    </section>
+    <section id="visualize_01" class="visualize"></section>
+    <section id="visualize_02" class="visualize"></section>
+    <section id="visualize_03" class="visualize"></section>
 
     <div id="layerControls" class="layer-controls"></div>
 
     <main>
-        <div class="camera">
-            <video id="video" autoplay muted playsinline></video>
-            <aside class="panel">
-                <span id="status">モデル読み込み中...</span>
-                <div id="bars"></div>
-            </aside>
-        </div>
+        <video id="video" autoplay muted playsinline></video>
+        <aside class="panel">
+            <span id="status">モデル読み込み中...</span>
+            <div id="bars"></div>
+        </aside>
     </main>
 
     <script>
         window.addEventListener("load", () => {
             const MODEL_URL = "../faceAPI/models";
-
-            const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
-            const layerControls = document.getElementById("layerControls");
-
-            visualizeSections.forEach((section) => {
-                const layer = Number(section.id.replace("visualize_", ""));
-                section.style.zIndex = String(10 + layer);
-                section.hidden = true;
-            });
-
-            layerControls.innerHTML = visualizeSections.map((section) => `
-                <label>
-                    <input type="checkbox" data-target="${section.id}">
-                    <span>${section.id}</span>
-                </label>
-            `).join("");
-
-            layerControls.addEventListener("change", (event) => {
-                const input = event.target;
-
-                if (!(input instanceof HTMLInputElement)) {
-                    return;
-                }
-
-                const target = document.getElementById(input.dataset.target);
-                if (target) {
-                    target.hidden = !input.checked;
-                }
-            });
+            const MAX_CAMERA_SIZE = 4096;
 
             const video = document.getElementById("video");
             const status = document.getElementById("status");
             const bars = document.getElementById("bars");
+            const layerControls = document.getElementById("layerControls");
+            const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
 
             let running = false;
             let cameraSize = "";
 
+            function clampScore(score) {
+                return Math.min(1, Math.max(0, Number(score || 0)));
+            }
+
+            function setupLayerControls() {
+                visualizeSections.forEach((section) => {
+                    const layer = Number(section.id.replace("visualize_", ""));
+                    section.style.zIndex = String(10 + layer);
+                    section.hidden = true;
+                });
+
+                layerControls.innerHTML = visualizeSections.map((section) => `
+                    <label>
+                        <input type="checkbox" data-target="${section.id}">
+                        <span>${section.id}</span>
+                    </label>
+                `).join("");
+
+                layerControls.addEventListener("change", (event) => {
+                    const input = event.target;
+
+                    if (input instanceof HTMLInputElement) {
+                        const target = document.getElementById(input.dataset.target);
+                        if (target) {
+                            target.hidden = !input.checked;
+                        }
+                    }
+                });
+            }
+
             function updateExpressions(expressions = {}) {
                 bars.innerHTML = Object.entries(expressions).map(([name, score]) => {
-                    const value = Math.min(1, Math.max(0, Number(score || 0)));
+                    const value = clampScore(score);
 
                     return `
                         <div class="bar-row">
@@ -228,18 +219,19 @@
                 try {
                     video.srcObject = await navigator.mediaDevices.getUserMedia({
                         video: {
-                            width: { ideal: 4096 },
-                            height: { ideal: 2160 },
+                            width: { ideal: MAX_CAMERA_SIZE },
+                            height: { ideal: MAX_CAMERA_SIZE },
                             frameRate: { ideal: 60 }
                         },
                         audio: false
                     });
+
                     await video.play();
-                    running = true;
-                    const track = video.srcObject.getVideoTracks()[0];
-                    const settings = track.getSettings();
+
+                    const settings = video.srcObject.getVideoTracks()[0].getSettings();
                     cameraSize = `${settings.width}x${settings.height}`;
                     status.textContent = cameraSize;
+                    running = true;
                     detect();
                 } catch (error) {
                     status.textContent = `カメラを開始できません: ${error.message}`;
@@ -255,6 +247,7 @@
                 startCamera();
             }
 
+            setupLayerControls();
             loadModels().catch((error) => {
                 status.textContent = `モデルを読み込めません: ${error.message}`;
             });
