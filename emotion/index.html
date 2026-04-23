@@ -29,10 +29,24 @@
             overflow: hidden;
         }
 
-        video {
+        video,
+        img {
+            position: absolute;
+            inset: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
+            display: block;
+        }
+
+        video[hidden],
+        img[hidden] {
+            display: none;
+        }
+
+        main.file-source video,
+        main.file-source img {
+            object-fit: contain;
         }
 
         .visualize {
@@ -97,6 +111,35 @@
             gap: 8px;
         }
 
+        .source-controls {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            z-index: 999;
+            display: grid;
+            gap: 8px;
+        }
+
+        .source-controls button,
+        .source-controls label {
+            padding: 8px 10px;
+            border: 0;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            color: #f4f7fb;
+            font: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .source-controls input {
+            position: absolute;
+            inline-size: 1px;
+            block-size: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
         .layer-controls label {
             display: flex;
             align-items: center;
@@ -148,6 +191,12 @@
                 top: 8px;
                 right: 8px;
             }
+
+            .source-controls {
+                top: 8px;
+                left: 8px;
+                max-width: calc(100% - 112px);
+            }
         }
     </style>
 </head>
@@ -166,6 +215,13 @@
 
     <main>
         <video id="video" autoplay muted playsinline></video>
+        <img id="image" alt="インポートした画像" hidden>
+        <div class="source-controls">
+            <button id="cameraButton" type="button">WebCam</button>
+            <label for="fileInput">ファイルから
+                <input id="fileInput" type="file" accept="image/*,video/*">
+            </label>
+        </div>
         <div id="layerControls" class="layer-controls"></div>
         <aside class="panel">
             <span id="status">モデル読み込み中...</span>
@@ -177,14 +233,23 @@
         window.addEventListener("load", () => {
             const MODEL_URL = "../faceAPI/models";
             const MAX_CAMERA_SIZE = 4096;
-            const RADAR_AXES = ["happy", "surprised", "fearful", "sad", "disgusted", "angry",];
+            const RADAR_AXES = ["happy", "surprised", "fearful", "sad", "disgusted", "angry"];
             const RADAR_CENTER = 100;
             const RADAR_RADIUS = 72;
+            const SOURCE_LABELS = {
+                camera: "カメラ",
+                "image-file": "画像ファイル",
+                "video-file": "動画ファイル"
+            };
 
+            const stage = document.querySelector("main");
             const video = document.getElementById("video");
+            const image = document.getElementById("image");
             const status = document.getElementById("status");
             const bars = document.getElementById("bars");
             const panel = document.querySelector(".panel");
+            const cameraButton = document.getElementById("cameraButton");
+            const fileInput = document.getElementById("fileInput");
             const layerControls = document.getElementById("layerControls");
             const radarAxes = document.getElementById("radarAxes");
             const radarGrid = document.getElementById("radarGrid");
@@ -193,7 +258,11 @@
             const visualizeSections = [...document.querySelectorAll('section[id^="visualize_"]')];
 
             let running = false;
-            let cameraSize = "";
+            let mediaSize = "";
+            let activeMedia = video;
+            let activeMode = "camera";
+            let activeObjectUrl = "";
+            let detectToken = 0;
 
             function clampScore(score) {
                 return Math.min(1, Math.max(0, Number(score || 0)));
@@ -293,29 +362,98 @@
                 updateRadarChart(expressions);
             }
 
-            async function detect() {
+            function stopCameraStream() {
+                const stream = video.srcObject instanceof MediaStream ? video.srcObject : null;
+
+                if (stream) {
+                    stream.getTracks().forEach((track) => track.stop());
+                    video.srcObject = null;
+                }
+            }
+
+            function clearImportedFile() {
+                if (activeObjectUrl) {
+                    URL.revokeObjectURL(activeObjectUrl);
+                    activeObjectUrl = "";
+                }
+
+                image.removeAttribute("src");
+                video.removeAttribute("src");
+                video.load();
+                fileInput.value = "";
+            }
+
+            function stopDetection() {
+                running = false;
+                detectToken += 1;
+            }
+
+            function setActiveMedia(media, mode, sizeText = "") {
+                activeMedia = media;
+                activeMode = mode;
+                mediaSize = sizeText;
+                stage.classList.toggle("file-source", mode !== "camera");
+                image.hidden = media !== image;
+                video.hidden = media !== video;
+                video.controls = mode === "video-file";
+                video.loop = mode === "video-file";
+            }
+
+            function formatMediaSize(media) {
+                const width = media.videoWidth || media.naturalWidth || media.width;
+                const height = media.videoHeight || media.naturalHeight || media.height;
+
+                return width && height ? `${width}x${height}` : "";
+            }
+
+            function updateStatus(message) {
+                status.textContent = message;
+            }
+
+            function updateDetectionStatus(detections) {
+                const state = detections.length ? "検出中" : "顔が見つかりません";
+                updateStatus([SOURCE_LABELS[activeMode], mediaSize, state].filter(Boolean).join(" / "));
+            }
+
+            async function runDetection() {
+                const detections = await faceapi
+                    .detectAllFaces(activeMedia, new faceapi.TinyFaceDetectorOptions())
+                    .withFaceExpressions();
+
+                updateExpressions(detections[0]?.expressions);
+                updateDetectionStatus(detections);
+            }
+
+            async function detect(token = detectToken) {
                 if (!running) {
                     return;
                 }
 
                 try {
-                    const detections = await faceapi
-                        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-                        .withFaceExpressions();
-
-                    updateExpressions(detections[0]?.expressions);
-
-                    const state = detections.length ? "検出中" : "顔が見つかりません";
-                    status.textContent = cameraSize ? `${cameraSize} / ${state}` : state;
+                    await runDetection();
                 } catch (error) {
-                    status.textContent = `推定エラー: ${error.message}`;
+                    updateStatus(`推定エラー: ${error.message}`);
                 }
 
-                requestAnimationFrame(detect);
+                if (running && token === detectToken) {
+                    requestAnimationFrame(() => detect(token));
+                }
+            }
+
+            async function detectOnce() {
+                stopDetection();
+                try {
+                    await runDetection();
+                } catch (error) {
+                    updateStatus(`推定エラー: ${error.message}`);
+                }
             }
 
             async function startCamera() {
-                status.textContent = "カメラ起動中...";
+                updateStatus("カメラ起動中...");
+                stopDetection();
+                stopCameraStream();
+                clearImportedFile();
 
                 try {
                     video.srcObject = await navigator.mediaDevices.getUserMedia({
@@ -330,13 +468,81 @@
                     await video.play();
 
                     const settings = video.srcObject.getVideoTracks()[0].getSettings();
-                    cameraSize = `${settings.width}x${settings.height}`;
-                    status.textContent = cameraSize;
+                    setActiveMedia(video, "camera", `${settings.width}x${settings.height}`);
+                    updateStatus(`${SOURCE_LABELS.camera} / ${mediaSize}`);
                     running = true;
                     detect();
                 } catch (error) {
-                    status.textContent = `カメラを開始できません: ${error.message}`;
+                    updateStatus(`カメラを開始できません: ${error.message}`);
                 }
+            }
+
+            function waitForMediaLoad(media, eventName) {
+                return new Promise((resolve, reject) => {
+                    const cleanup = () => {
+                        media.removeEventListener(eventName, handleLoad);
+                        media.removeEventListener("error", handleError);
+                    };
+                    const handleLoad = () => {
+                        cleanup();
+                        resolve();
+                    };
+                    const handleError = () => {
+                        cleanup();
+                        reject(new Error("ファイルを読み込めません"));
+                    };
+
+                    media.addEventListener(eventName, handleLoad, { once: true });
+                    media.addEventListener("error", handleError, { once: true });
+                });
+            }
+
+            function loadFileMedia(media, source, eventName) {
+                const loaded = waitForMediaLoad(media, eventName);
+                media.src = source;
+                media.load?.();
+                return loaded;
+            }
+
+            async function startVideoFile() {
+                try {
+                    running = true;
+                    await video.play();
+                    detect();
+                } catch (error) {
+                    stopDetection();
+                    updateStatus("動画を再生すると検出を開始します");
+                }
+            }
+
+            async function importFile(file) {
+                if (!file) {
+                    return;
+                }
+
+                stopDetection();
+                stopCameraStream();
+                clearImportedFile();
+                activeObjectUrl = URL.createObjectURL(file);
+
+                if (file.type.startsWith("image/")) {
+                    updateStatus("画像ファイル読み込み中...");
+                    await loadFileMedia(image, activeObjectUrl, "load");
+                    setActiveMedia(image, "image-file", formatMediaSize(image));
+                    await detectOnce();
+                    return;
+                }
+
+                if (file.type.startsWith("video/")) {
+                    updateStatus("動画ファイル読み込み中...");
+                    await loadFileMedia(video, activeObjectUrl, "loadedmetadata");
+                    setActiveMedia(video, "video-file", formatMediaSize(video));
+                    await startVideoFile();
+                    return;
+                }
+
+                clearImportedFile();
+                updateStatus("画像または動画ファイルを選択してください");
             }
 
             async function loadModels() {
@@ -348,10 +554,29 @@
                 startCamera();
             }
 
+            cameraButton.addEventListener("click", startCamera);
+            fileInput.addEventListener("change", (event) => {
+                importFile(event.target.files[0]).catch((error) => {
+                    updateStatus(`ファイルを読み込めません: ${error.message}`);
+                });
+            });
+            video.addEventListener("play", () => {
+                if (activeMode === "video-file" && !running) {
+                    running = true;
+                    detectToken += 1;
+                    detect();
+                }
+            });
+            video.addEventListener("pause", () => {
+                if (activeMode === "video-file") {
+                    stopDetection();
+                }
+            });
+
             setupLayerControls();
             setupRadarChart();
             loadModels().catch((error) => {
-                status.textContent = `モデルを読み込めません: ${error.message}`;
+                updateStatus(`モデルを読み込めません: ${error.message}`);
             });
         });
     </script>
