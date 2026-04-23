@@ -7,10 +7,6 @@
     <title>Emotion Demo</title>
     <script defer src="../faceAPI/face-api.min.js"></script>
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
         body {
             margin: 0;
             padding: 0;
@@ -22,19 +18,19 @@
             font-family: "Yu Gothic Medium", "Yu Gothic", sans-serif;
         }
 
+        video {
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
         .camera {
             position: relative;
             width: min(100vw, 75vh);
             height: min(100vh, 133.333vw);
             aspect-ratio: 3 / 4;
             overflow: hidden;
-        }
-
-        video {
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
         }
 
         .panel {
